@@ -110,9 +110,8 @@ notes_sync.koplugin/
 │   └── events.lua                 # Event handling (book finished)
 └── ui/
     ├── notes_menu.lua            # Main menu UI
-    ├── general_notes_dialog.lua  # General notes editor
-    ├── chapter_notes_dialog.lua  # Chapter notes editor with highlights
-    └── settings_dialog.lua        # Settings UI
+    ├── notes_viewer_dialog.lua   # General & Chapter notes editor with highlights
+    └── settings_dialog.lua       # Settings UI
 ```
 
 ## Implementation Details
@@ -166,13 +165,13 @@ notes_sync.koplugin/
   - [Chapter N notes] - Open chapter notes editor for each chapter
 - [Settings] - Configure Notion API token, auto-sync
 
-#### General Notes Dialog (`ui/general_notes_dialog.lua`)
+#### General Notes Dialog (`ui/notes_viewer_dialog.lua`)
 
 - Multi-line text editor (similar to `JournalDialog` in hardcoverapp)
 - Load/save from DocSettings
 - Use `TextBoxWidget` or `InputDialog` with `allow_newline = true`
 
-#### Chapter Notes Dialog (`ui/chapter_notes_dialog.lua`)
+#### Chapter Notes Dialog (`ui/notes_viewer_dialog.lua`)
 
 - Display chapter title
 - Show highlights for that chapter with page ranges
