@@ -45,9 +45,40 @@ function ExportHandler:exportToFile(file_path)
     return true, nil
 end
 
+-- Get book metadata (title and author)
+function ExportHandler:getBookMetadata()
+    local book_title = "Unknown Book"
+    local book_author = "Unknown Author"
+    
+    if self.ui and self.ui.document then
+        local doc_props = self.ui.document:getProps()
+        if doc_props then
+            if doc_props.title then
+                book_title = doc_props.title
+            end
+            if doc_props.authors then
+                -- Authors can be a table or string
+                if type(doc_props.authors) == "table" then
+                    book_author = table.concat(doc_props.authors, ", ")
+                else
+                    book_author = doc_props.authors or "Unknown Author"
+                end
+            end
+        end
+    end
+    
+    return book_title, book_author
+end
+
 -- Build export content in the specified format
 function ExportHandler:buildExportContent()
     local lines = {}
+    
+    -- Get book metadata
+    local book_title, book_author = self:getBookMetadata()
+    table.insert(lines, "Book title: " .. book_title)
+    table.insert(lines, "Author: " .. book_author)
+    table.insert(lines, "")
     
     -- General Notes section
     local general_notes = self.notes_manager:getGeneralNotes()
@@ -70,6 +101,12 @@ function ExportHandler:buildExportContent()
                 -- Chapter header
                 table.insert(lines, "=== Chapter " .. i .. " " .. chapter.title .. " ===")
                 
+                -- General chapter notes first (if any, not associated with specific highlights)
+                if chapter_data.notes and chapter_data.notes ~= "" then
+                    table.insert(lines, chapter_data.notes)
+                    table.insert(lines, "")
+                end
+                
                 -- Process highlights with notes
                 if chapter_data.highlights and #chapter_data.highlights > 0 then
                     for _, highlight in ipairs(chapter_data.highlights) do
@@ -77,25 +114,20 @@ function ExportHandler:buildExportContent()
                         local highlight_text = highlight.text or ""
                         local note_text = highlight.note or ""
                         
-                        if highlight_text ~= "" or note_text ~= "" then
-                            local line = "[" .. page_range .. "]"
+                        if highlight_text ~= "" then
+                            -- Highlight on its own line
+                            table.insert(lines, "[" .. page_range .. "]```" .. highlight_text .. "```")
                             
-                            if highlight_text ~= "" then
-                                line = line .. "```" .. highlight_text .. "```"
-                            end
-                            
+                            -- Note on separate line
                             if note_text ~= "" then
-                                line = line .. "[" .. note_text .. "]"
+                                table.insert(lines, "Note: " .. note_text)
+                            else
+                                table.insert(lines, "Note: ")
                             end
                             
-                            table.insert(lines, line)
+                            table.insert(lines, "") -- Empty line between highlights
                         end
                     end
-                end
-                
-                -- General chapter notes (if any, not associated with specific highlights)
-                if chapter_data.notes and chapter_data.notes ~= "" then
-                    table.insert(lines, chapter_data.notes)
                 end
                 
                 table.insert(lines, "")
@@ -111,18 +143,18 @@ function ExportHandler:buildExportContent()
                 local highlight_text = highlight.text or ""
                 local note_text = highlight.note or ""
                 
-                if highlight_text ~= "" or note_text ~= "" then
-                    local line = "[" .. page_range .. "]"
+                if highlight_text ~= "" then
+                    -- Highlight on its own line
+                    table.insert(lines, "[" .. page_range .. "]```" .. highlight_text .. "```")
                     
-                    if highlight_text ~= "" then
-                        line = line .. "```" .. highlight_text .. "```"
-                    end
-                    
+                    -- Note on separate line
                     if note_text ~= "" then
-                        line = line .. "[" .. note_text .. "]"
+                        table.insert(lines, "Note: " .. note_text)
+                    else
+                        table.insert(lines, "Note: ")
                     end
                     
-                    table.insert(lines, line)
+                    table.insert(lines, "") -- Empty line between highlights
                 end
             end
         end

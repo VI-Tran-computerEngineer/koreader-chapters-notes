@@ -10,10 +10,12 @@ local Events = require("lib/events")
 local GeneralNotesDialog = require("ui/general_notes_dialog")
 local ChapterNotesDialog = require("ui/chapter_notes_dialog")
 local SettingsDialog = require("ui/settings_dialog")
+local NotesViewerDialog = require("ui/notes_viewer_dialog")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local FileManager = require("apps/filemanager/filemanager")
+local Screen = require("device").screen
 local _ = require("gettext")
 local logger = require("logger")
 
@@ -41,7 +43,32 @@ function NotesSync:init()
 end
 
 -------------------------------------------------------
--- Handle end of book event (called by KOReader framework)
+-- Called when reader is ready (book opened)
+-- Auto-detect chapters on first open
+-------------------------------------------------------
+function NotesSync:onReaderReady()
+    -- Auto-detect and cache chapters when book is first opened
+    if self.ui and self.ui.document then
+        local file_path = self:getCurrentDocument()
+        if file_path then
+            local notes_manager = NotesManager:new(file_path)
+            
+            -- Only parse if not already cached
+            if not notes_manager:hasChaptersCache() then
+                local chapter_parser = ChapterParser:new(self.ui.document)
+                local chapters = chapter_parser:getChapters()
+                
+                if #chapters > 0 then
+                    notes_manager:saveChaptersCache(chapters)
+                    logger.info("NotesSync: Auto-detected and cached " .. #chapters .. " chapters")
+                end
+            end
+        end
+    end
+end
+
+-------------------------------------------------------
+-- Handle end of book event (called by KOReader)
 -------------------------------------------------------
 function NotesSync:onEndOfBook()
     if self.events then
@@ -69,7 +96,17 @@ function NotesSync:getManagers()
     end
     
     local notes_manager = NotesManager:new(file_path)
-    local chapter_parser = ChapterParser:new(self.ui.document)
+    
+    -- Try to load cached chapters first
+    local cached_chapters = notes_manager:getChaptersCache()
+    local chapter_parser = ChapterParser:new(self.ui.document, cached_chapters)
+    
+    -- If no cache exists and we parsed chapters, save them
+    if not cached_chapters and #chapter_parser:getChapters() > 0 then
+        notes_manager:saveChaptersCache(chapter_parser:getChapters())
+        logger.info("NotesSync: Cached " .. #chapter_parser:getChapters() .. " chapters")
+    end
+    
     local export_handler = ExportHandler:new(notes_manager, chapter_parser, self.ui)
     
     return notes_manager, chapter_parser, export_handler, file_path
@@ -105,14 +142,27 @@ function NotesSync:syncToNotion(silent)
         return
     end
     
-    -- Get book title
+    -- Get book title and author
     local book_title = "Unknown Book"
+    local book_author = "Unknown Author"
     if self.ui.document then
         local doc_props = self.ui.document:getProps()
-        if doc_props and doc_props.title then
-            book_title = doc_props.title
-        else
-            -- Fallback to filename
+        if doc_props then
+            if doc_props.title then
+                book_title = doc_props.title
+            end
+            if doc_props.authors then
+                -- Authors can be a table or string
+                if type(doc_props.authors) == "table" then
+                    book_author = table.concat(doc_props.authors, ", ")
+                else
+                    book_author = doc_props.authors or "Unknown Author"
+                end
+            end
+        end
+        
+        -- Fallback to filename if no title
+        if book_title == "Unknown Book" then
             local filename = file_path:match("([^/]+)$")
             if filename then
                 book_title = filename:gsub("%.[^%.]+$", "") -- Remove extension
@@ -132,7 +182,7 @@ function NotesSync:syncToNotion(silent)
     end
     
     -- Perform sync (async would be better, but for now we do it synchronously)
-    local success, err = notion_client:syncNotes(book_title, general_notes, chapter_notes, chapter_parser)
+    local success, err = notion_client:syncNotes(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     
     if not silent then
         if success then
@@ -223,6 +273,8 @@ function NotesSync:openGeneralNotes()
     
     local dialog = GeneralNotesDialog:new{
         title = _("General Notes"),
+        description = _("Write your general notes for this book"),
+        input_hint = _("Enter your notes here..."),
         input = current_notes,
         save_callback = function(text)
             notes_manager:saveGeneralNotes(text)
@@ -331,10 +383,24 @@ function NotesSync:buildChapterMenuItems()
     local items = {}
     
     if #chapters > 0 then
+        -- Show all detected chapters
         for i = 1, #chapters do
             local chapter = chapters[i]
+            local chapter_data = notes_manager:getChapterNotesForChapter(i)
+            
+            -- Build menu text with status indicator
+            local menu_text = string.format(_("Chapter %d: %s"), i, chapter.title)
+            
+            -- Add indicator if chapter has notes or highlights
+            if chapter_data.notes and chapter_data.notes ~= "" then
+                menu_text = menu_text .. " [📝]"
+            end
+            if chapter_data.highlights and #chapter_data.highlights > 0 then
+                menu_text = menu_text .. " [✨]"
+            end
+            
             table.insert(items, {
-                text = _("Chapter ") .. i .. ": " .. chapter.title,
+                text = menu_text,
                 keep_menu_open = true,
                 callback = function()
                     self:openChapterNotes(i)
@@ -342,9 +408,28 @@ function NotesSync:buildChapterMenuItems()
             })
         end
     else
-        -- No chapters found, but still allow creating chapter notes
+        -- No chapters found - try to auto-detect on first access
+        -- Check if we can detect chapters now
+        if self.ui and self.ui.document then
+            local temp_parser = ChapterParser:new(self.ui.document)
+            local temp_chapters = temp_parser:getChapters()
+            
+            if #temp_chapters > 0 then
+                -- Cache the detected chapters
+                local file_path = self:getCurrentDocument()
+                if file_path then
+                    local temp_manager = NotesManager:new(file_path)
+                    temp_manager:saveChaptersCache(temp_chapters)
+                end
+                
+                -- Rebuild menu items with detected chapters
+                return self:buildChapterMenuItems()
+            end
+        end
+        
+        -- Still no chapters - allow creating chapter notes manually
         table.insert(items, {
-            text = _("Chapter 1"),
+            text = _("Chapter 1 (No TOC detected)"),
             keep_menu_open = true,
             callback = function()
                 self:openChapterNotes(1)
@@ -353,6 +438,30 @@ function NotesSync:buildChapterMenuItems()
     end
     
     return items
+end
+
+-------------------------------------------------------
+-- Open notes viewer (similar to vocabulary builder)
+-------------------------------------------------------
+function NotesSync:openNotesViewer()
+    local notes_manager, chapter_parser = self:getManagers()
+    if not notes_manager then
+        self:show_message(_("No document open"))
+        return
+    end
+    
+    local dialog = NotesViewerDialog:new{
+        title = _("Notes"),
+        width = nil, -- Use full screen like VocabBuilder
+        height = nil, -- Use full screen like VocabBuilder
+        notes_sync = self,
+        notes_manager = notes_manager,
+        chapter_parser = chapter_parser,
+        ui = self.ui,
+        current_index = 0,
+    }
+    
+    UIManager:show(dialog)
 end
 
 -------------------------------------------------------
@@ -402,7 +511,9 @@ function NotesSync:addToMainMenu(menu_items)
             {
                 text = _("Open notes"),
                 keep_menu_open = true,
-                sub_item_table = open_notes_submenu,
+                callback = function()
+                    plugin:openNotesViewer()
+                end,
             },
             {
                 text = _("Settings"),

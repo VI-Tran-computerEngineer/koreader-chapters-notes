@@ -5,11 +5,19 @@ local logger = require("logger")
 local ChapterParser = {}
 ChapterParser.__index = ChapterParser
 
-function ChapterParser:new(document)
+function ChapterParser:new(document, cached_chapters)
     local o = setmetatable({}, self)
     o.document = document
     o.chapters = {}
-    o:parseTOC()
+    
+    -- Use cached chapters if available, otherwise parse TOC
+    if cached_chapters and #cached_chapters > 0 then
+        o.chapters = cached_chapters
+        logger.info("ChapterParser: Using cached chapters (" .. #cached_chapters .. " chapters)")
+    else
+        o:parseTOC()
+    end
+    
     return o
 end
 

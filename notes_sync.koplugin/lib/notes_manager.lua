@@ -95,4 +95,21 @@ function NotesManager:getHighlightsForPageRange(ui, page_start, page_end)
     return filtered
 end
 
+-- Cache chapters information
+function NotesManager:saveChaptersCache(chapters)
+    self.doc_settings:saveSetting("chapters_cache", chapters)
+    self.doc_settings:flush()
+end
+
+-- Get cached chapters information
+function NotesManager:getChaptersCache()
+    return self.doc_settings:readSetting("chapters_cache") or nil
+end
+
+-- Check if chapters have been cached
+function NotesManager:hasChaptersCache()
+    local cache = self:getChaptersCache()
+    return cache ~= nil and #cache > 0
+end
+
 return NotesManager

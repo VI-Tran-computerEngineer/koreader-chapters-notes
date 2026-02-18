@@ -18,7 +18,7 @@ function NotionClient:new(api_token, database_id)
 end
 
 -- Sync notes to Notion
-function NotionClient:syncNotes(book_title, general_notes, chapter_notes, chapter_parser)
+function NotionClient:syncNotes(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     if not self.api_token or self.api_token == "" then
         return false, _("Notion API token not configured")
     end
@@ -28,7 +28,7 @@ function NotionClient:syncNotes(book_title, general_notes, chapter_notes, chapte
     end
     
     -- Create or update page in Notion database
-    local success, err = self:createOrUpdatePage(book_title, general_notes, chapter_notes, chapter_parser)
+    local success, err = self:createOrUpdatePage(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     
     if not success then
         return false, err or _("Failed to sync to Notion")
@@ -38,16 +38,16 @@ function NotionClient:syncNotes(book_title, general_notes, chapter_notes, chapte
 end
 
 -- Create or update a page in Notion
-function NotionClient:createOrUpdatePage(book_title, general_notes, chapter_notes, chapter_parser)
+function NotionClient:createOrUpdatePage(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     -- First, try to find existing page
     local page_id = self:findPageByTitle(book_title)
     
     if page_id then
         -- Update existing page
-        return self:updatePage(page_id, general_notes, chapter_notes, chapter_parser)
+        return self:updatePage(page_id, book_title, book_author, general_notes, chapter_notes, chapter_parser)
     else
         -- Create new page
-        return self:createPage(book_title, general_notes, chapter_notes, chapter_parser)
+        return self:createPage(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     end
 end
 
@@ -97,11 +97,11 @@ function NotionClient:findPageByTitle(title)
 end
 
 -- Create a new page in Notion
-function NotionClient:createPage(book_title, general_notes, chapter_notes, chapter_parser)
+function NotionClient:createPage(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     local url = self.api_base .. "/pages"
     
     -- Build page content blocks
-    local blocks = self:buildPageBlocks(general_notes, chapter_notes, chapter_parser)
+    local blocks = self:buildPageBlocks(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     
     local request_body = json.encode({
         parent = {
@@ -144,7 +144,7 @@ function NotionClient:createPage(book_title, general_notes, chapter_notes, chapt
 end
 
 -- Update an existing page in Notion
-function NotionClient:updatePage(page_id, general_notes, chapter_notes, chapter_parser)
+function NotionClient:updatePage(page_id, book_title, book_author, general_notes, chapter_notes, chapter_parser)
     -- First, clear existing content (get children and delete them)
     local children = self:getPageChildren(page_id)
     if children then
@@ -154,7 +154,7 @@ function NotionClient:updatePage(page_id, general_notes, chapter_notes, chapter_
     end
     
     -- Build new content blocks
-    local blocks = self:buildPageBlocks(general_notes, chapter_notes, chapter_parser)
+    local blocks = self:buildPageBlocks(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     
     -- Append new blocks
     if #blocks > 0 then
@@ -188,8 +188,47 @@ function NotionClient:updatePage(page_id, general_notes, chapter_notes, chapter_
 end
 
 -- Build Notion blocks from notes
-function NotionClient:buildPageBlocks(general_notes, chapter_notes, chapter_parser)
+function NotionClient:buildPageBlocks(book_title, book_author, general_notes, chapter_notes, chapter_parser)
     local blocks = {}
+    
+    -- Book metadata
+    table.insert(blocks, {
+        object = "block",
+        type = "paragraph",
+        paragraph = {
+            rich_text = {
+                {
+                    type = "text",
+                    text = {
+                        content = "Book title: " .. (book_title or "Unknown Book")
+                    }
+                }
+            }
+        }
+    })
+    
+    table.insert(blocks, {
+        object = "block",
+        type = "paragraph",
+        paragraph = {
+            rich_text = {
+                {
+                    type = "text",
+                    text = {
+                        content = "Author: " .. (book_author or "Unknown Author")
+                    }
+                }
+            }
+        }
+    })
+    
+    table.insert(blocks, {
+        object = "block",
+        type = "paragraph",
+        paragraph = {
+            rich_text = {}
+        }
+    })
     
     -- General Notes section
     if general_notes and general_notes ~= "" then
@@ -241,18 +280,45 @@ function NotionClient:buildPageBlocks(general_notes, chapter_notes, chapter_pars
                             {
                                 type = "text",
                                 text = {
-                                    content = "Chapter " .. i .. ": " .. chapter.title
+                                    content = "Chapter " .. i .. " " .. chapter.title
                                 }
                             }
                         }
                     }
                 })
                 
+                -- General chapter notes first (if any, not associated with specific highlights)
+                if chapter_data.notes and chapter_data.notes ~= "" then
+                    table.insert(blocks, {
+                        object = "block",
+                        type = "paragraph",
+                        paragraph = {
+                            rich_text = {
+                                {
+                                    type = "text",
+                                    text = {
+                                        content = chapter_data.notes
+                                    }
+                                }
+                            }
+                        }
+                    })
+                end
+                
                 -- Process highlights
                 if chapter_data.highlights and #chapter_data.highlights > 0 then
                     for _, highlight in ipairs(chapter_data.highlights) do
-                        -- Highlight as code block
+                        -- Highlight as code block with page range
                         if highlight.text and highlight.text ~= "" then
+                            local page_range = ""
+                            if highlight.page_start then
+                                if highlight.page_end and highlight.page_start ~= highlight.page_end then
+                                    page_range = "[page " .. highlight.page_start .. "-" .. highlight.page_end .. "]"
+                                else
+                                    page_range = "[page " .. highlight.page_start .. "]"
+                                end
+                            end
+                            
                             table.insert(blocks, {
                                 object = "block",
                                 type = "code",
@@ -261,17 +327,16 @@ function NotionClient:buildPageBlocks(general_notes, chapter_notes, chapter_pars
                                         {
                                             type = "text",
                                             text = {
-                                                content = highlight.text
+                                                content = page_range .. "```" .. highlight.text .. "```"
                                             }
                                         }
                                     },
                                     language = "plain text"
                                 }
                             })
-                        end
-                        
-                        -- Note as paragraph
-                        if highlight.note and highlight.note ~= "" then
+                            
+                            -- Note as paragraph with "Note:" prefix
+                            local note_text = highlight.note or ""
                             table.insert(blocks, {
                                 object = "block",
                                 type = "paragraph",
@@ -280,7 +345,7 @@ function NotionClient:buildPageBlocks(general_notes, chapter_notes, chapter_pars
                                         {
                                             type = "text",
                                             text = {
-                                                content = highlight.note
+                                                content = "Note: " .. note_text
                                             }
                                         }
                                     }
@@ -288,27 +353,6 @@ function NotionClient:buildPageBlocks(general_notes, chapter_notes, chapter_pars
                             })
                         end
                     end
-                end
-                
-                -- General chapter notes
-                if chapter_data.notes and chapter_data.notes ~= "" then
-                    table.insert(blocks, {
-                        object = "block",
-                        type = "callout",
-                        callout = {
-                            rich_text = {
-                                {
-                                    type = "text",
-                                    text = {
-                                        content = chapter_data.notes
-                                    }
-                                }
-                            },
-                            icon = {
-                                emoji = "📝"
-                            }
-                        }
-                    })
                 end
             end
         end
